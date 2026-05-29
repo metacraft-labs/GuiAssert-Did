@@ -36,8 +36,8 @@
 ##      response carries an `id` plus a `url` we can pass back in the
 ##      `/talks` payload as `source_url`.
 ##   2. `POST /audios` (multipart) — uploads the narration WAV. The
-##      response carries an `id` (which we hand to `/talks` as
-##      `script.audio_id`).
+##      response carries a `url` which we hand to `/talks` as
+##      `script.audio_url`.
 ##   3. `POST /talks` (JSON) — creates the talk job. Returns the
 ##      `talk_id`.
 ##   4. `GET /talks/{talk_id}` — polled every `intervalMs` until the
@@ -102,19 +102,20 @@ proc resolveApiBase*(opts: TalkingHeadOpts): string =
     base.setLen(base.len - 1)
   result = base
 
-proc buildCreateTalkBody*(sourceUrl, audioId: string,
+proc buildCreateTalkBody*(sourceUrl, audioUrl: string,
                           stitch = true): JsonNode =
   ## Construct the JSON body for `POST /talks`. The `sourceUrl` is the
   ## URL returned by `POST /images` (D-ID dereferences this server-side
-  ## to fetch the avatar). The `audioId` is the bare id returned by
-  ## `POST /audios`. `stitch: true` blends the lip-sync patch into the
+  ## to fetch the avatar). The `audioUrl` is the URL field returned by
+  ## `POST /audios` (D-ID's `s3://` URL or any HTTPS URL the renderer
+  ## can fetch). `stitch: true` blends the lip-sync patch into the
   ## full portrait frame, which is what we want for the talking-head
   ## overlay use-case.
   result = %*{
     "source_url": sourceUrl,
     "script": {
       "type": "audio",
-      "audio_id": audioId
+      "audio_url": audioUrl
     },
     "config": {
       "stitch": stitch
@@ -256,8 +257,8 @@ proc uploadImage*(client: HttpClient, apiBase, imagePath: string):
 proc uploadAudio*(client: HttpClient, apiBase, audioPath: string):
     tuple[id, url: string] =
   ## `POST /audios` with multipart/form-data. Returns the D-ID audio
-  ## `id`. The `id` is referenced from `POST /talks` as
-  ## `script.audio_id`.
+  ## `id` plus the dereferenceable `url`. The `url` is referenced from
+  ## `POST /talks` as `script.audio_url`.
   if not fileExists(audioPath):
     raise newException(DidError,
       "uploadAudio: narration WAV not found: " & audioPath)
@@ -269,11 +270,11 @@ proc uploadAudio*(client: HttpClient, apiBase, audioPath: string):
     raiseHttp("POST /audios", resp)
   result = parseUploadResponse(resp.body, "POST /audios")
 
-proc createTalk*(client: HttpClient, apiBase, sourceUrl, audioId: string):
+proc createTalk*(client: HttpClient, apiBase, sourceUrl, audioUrl: string):
     string =
   ## `POST /talks` with the create-talk JSON body. Returns the
   ## `talk_id` D-ID assigned to the job.
-  let body = buildCreateTalkBody(sourceUrl, audioId)
+  let body = buildCreateTalkBody(sourceUrl, audioUrl)
   client.headers["Content-Type"] = "application/json"
   let resp = client.request(apiBase & "/talks",
                             httpMethod = HttpPost, body = $body)
@@ -354,16 +355,27 @@ proc pollTalk*(apiKey, apiBase, talkId: string,
 
 proc downloadResult*(client: HttpClient, resultUrl, outputPath: string) =
   ## Download the rendered MP4. `result_url` is served from D-ID's CDN
-  ## (or, in tests, from the mock server) and does NOT require the
-  ## Authorization header — but it does no harm to send it, since the
-  ## CDN ignores unknown auth schemes.
+  ## (presigned AWS S3 URL in production). S3 *rejects* requests that
+  ## carry a stray `Authorization` header alongside the SigV4 query
+  ## parameters, so we build a fresh unauthenticated client just for
+  ## the download — the `client` argument is kept for API symmetry but
+  ## is intentionally unused.
+  discard client
   let outParent = outputPath.parentDir()
   if outParent.len > 0 and not dirExists(outParent):
     createDir(outParent)
-  let resp = client.request(resultUrl, httpMethod = HttpGet)
-  if not resp.code.is2xx:
-    raiseHttp("GET " & resultUrl, resp)
-  writeFile(outputPath, resp.body)
+  let dlHeaders = newHttpHeaders({
+    "User-Agent": "GuiAssert-Did/0.1 (+https://github.com/metacraft-labs/GuiAssert)",
+    "Connection": "close",
+  })
+  let dl = newHttpClient(timeout = 60_000, headers = dlHeaders)
+  try:
+    let resp = dl.request(resultUrl, httpMethod = HttpGet)
+    if not resp.code.is2xx:
+      raiseHttp("GET " & resultUrl, resp)
+    writeFile(outputPath, resp.body)
+  finally:
+    try: dl.close() except CatchableError: discard
   if not fileExists(outputPath) or getFileSize(outputPath) == 0:
     raise newException(DidError,
       "D-ID result download produced no bytes at " & outputPath)
@@ -431,7 +443,7 @@ proc didGenerateImpl(narrationWav, outputMp4: string,
       audio = uploadAudio(client, apiBase, narrationWav)
     var talkId: string
     withFreshClient(apiKey):
-      talkId = createTalk(client, apiBase, sourceUrl, audio.id)
+      talkId = createTalk(client, apiBase, sourceUrl, audio.url)
     let resultUrl = pollTalk(apiKey, apiBase, talkId,
                              maxSecs = maxPollSecs,
                              intervalMs = pollIntervalMs)

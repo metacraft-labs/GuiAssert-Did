@@ -43,6 +43,11 @@ import gui_assert_did
 when defined(didLive):
   discard  # std/[osproc, strformat, strutils, times] already imported
 
+# Capture the live API key at module load — pure tests below call
+# `delEnv(ApiKeyEnvVar)` to assert "missing key" behaviour, which would
+# otherwise wipe the user's real key before the live suite runs.
+let PreservedDidApiKey* {.used.} = getEnv(ApiKeyEnvVar)
+
 # ---------------------------------------------------------------------------
 # Path helpers
 # ---------------------------------------------------------------------------
@@ -121,7 +126,7 @@ suite "did create-talk body":
     let body = buildCreateTalkBody("https://cdn.example/img.png", "aud_42")
     check body["source_url"].getStr == "https://cdn.example/img.png"
     check body["script"]["type"].getStr == "audio"
-    check body["script"]["audio_id"].getStr == "aud_42"
+    check body["script"]["audio_url"].getStr == "aud_42"
     check body["config"]["stitch"].getBool == true
 
   test "stitch=false produces config.stitch=false":
@@ -479,9 +484,15 @@ suite "did mock-server integration":
 
     # ----- Authorization header exact-string check -----
     # base64("DUMMY_KEY:") == "RFVNTVlfS0VZOg=="
+    # The result-download (request [6]) intentionally drops the auth
+    # header — D-ID's CDN is a presigned AWS S3 URL that rejects
+    # SigV4-conflicting `Authorization` headers.
     let expectedAuth = "Basic RFVNTVlfS0VZOg=="
     for i, r in mockRequests:
-      check r.authHeader == expectedAuth
+      if i == 6:
+        check r.authHeader == ""
+      else:
+        check r.authHeader == expectedAuth
 
     # ----- Multipart Content-Type on uploads -----
     check mockRequests[0].contentType.startsWith("multipart/form-data")
@@ -508,7 +519,8 @@ suite "did mock-server integration":
     check talksBody["source_url"].getStr ==
       "http://localhost:" & portStr & "/uploads/img_TEST.png"
     check talksBody["script"]["type"].getStr == "audio"
-    check talksBody["script"]["audio_id"].getStr == "aud_TEST"
+    check talksBody["script"]["audio_url"].getStr ==
+      "http://localhost:" & portStr & "/uploads/aud_TEST.wav"
     check talksBody["config"]["stitch"].getBool == true
     check mockRequests[2].contentType == "application/json"
 
@@ -589,10 +601,13 @@ when defined(didLive):
   suite "did live render against api.d-id.com":
 
     test "renders a real talking-head MP4 via the D-ID API":
-      doAssert getEnv(ApiKeyEnvVar).len > 0,
+      doAssert PreservedDidApiKey.len > 0,
         "DID_API_KEY is not set. Live D-ID tests require a real API " &
         "key from https://studio.d-id.com (free trial is 5 minutes). " &
         "Export DID_API_KEY=<your key> and re-run with -d:didLive."
+      # Restore the env var: pure tests above call `delEnv(ApiKeyEnvVar)`,
+      # which also makes the provider's `isAvailable` check return false.
+      putEnv(ApiKeyEnvVar, PreservedDidApiKey)
 
       let avatar = ensureLivePortrait()
       let narration = ensureLiveNarration()
@@ -609,7 +624,7 @@ when defined(didLive):
         avatarImagePath: some(avatar),
         device: "auto",
         cacheDir: some(tmp / "cache"),
-        providerSettings: newJObject(),
+        providerSettings: %*{"api_key": PreservedDidApiKey},
         extraArgs: @[],
       )
 
