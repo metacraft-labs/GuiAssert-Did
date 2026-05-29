@@ -21,3 +21,7 @@ tests/tdid
 /.env
 /.env.*
 /tmp/
+
+# User-local direnv overrides (e.g. age-secrets loader for API keys).
+/user.envrc
+/.direnv/
