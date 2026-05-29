@@ -52,6 +52,7 @@ import std/[os, options, json, httpclient, base64, strutils,
             times, mimetypes]
 
 import gui_assert/talking_head
+import gui_assert/emotive
 
 type
   DidError* = object of TalkingHeadError
@@ -452,6 +453,188 @@ proc didGenerateImpl(narrationWav, outputMp4: string,
 
   {.cast(gcsafe).}:
     discard applyCache(cacheDir, key, outputMp4, generator)
+
+# ---------------------------------------------------------------------------
+# Capabilities + emotive translation + discovery + dry-run
+# ---------------------------------------------------------------------------
+
+const DidCapabilities* = ProviderCapabilities(
+  supportsEmotion: true,           ## via script.expressions[]
+  supportsHeadMotion: false,
+  supportsExpressionScale: false,
+  supportsGreenScreen: false,      ## driven by source image background
+  supportsTransparentBg: false,
+  supportsAudioInput: true,        ## script.type = "audio"
+  supportsTextInput: true,         ## script.type = "text"
+  supportsVoiceTuning: true,       ## script.provider.voice_config when using TTS
+  supportsGestures: false,
+  supportsEyeContact: false,
+  supportedEmotions: @[
+    "neutral", "happy", "surprise", "serious",
+  ],
+)
+
+proc emotionToExpression*(e: Emotion): tuple[expr: string, intensity: float] =
+  ## Project an internal `Emotion` onto D-ID's `script.expressions`
+  ## entry shape: a string drawn from the documented expression
+  ## taxonomy (`neutral` / `happy` / `surprise` / `serious`) plus a
+  ## 0..1 intensity.
+  ##
+  ## Unsupported emotions degrade to `neutral` at intensity 0.0 so
+  ## the array can still be populated for cache-key uniqueness.
+  case e
+  of eHappy, eExcited, eFriendly: ("happy", 0.85)
+  of eSurprised: ("surprise", 0.8)
+  of eSerious, eConfident, eThoughtful: ("serious", 0.6)
+  of eSad, eAngry: ("serious", 0.9)
+  of eCalm, eEnergetic, eNeutral: ("neutral", 0.0)
+
+proc emotiveToProviderSettings*(c: CommonEmotiveConfig;
+                                base: JsonNode = nil): JsonNode =
+  ## Project a `CommonEmotiveConfig` onto the keys this plugin's
+  ## generate path consumes (`emotion`, `voice_speed`, `voice_pitch`).
+  result = if base.isNil or base.kind != JObject: newJObject() else: base
+  if c.emotion.isSome:
+    setIfMissing(result, "emotion",
+                 %mapEmotion(DidCapabilities, c.emotion.get))
+  if c.intensity.isSome:
+    setIfMissing(result, "expression_intensity", %c.intensity.get)
+  if c.voiceSpeed.isSome:
+    setIfMissing(result, "voice_speed", %c.voiceSpeed.get)
+  if c.voicePitch.isSome:
+    setIfMissing(result, "voice_pitch", %c.voicePitch.get)
+
+proc applyExpressionsToScript*(scriptObj: JsonNode;
+                               c: CommonEmotiveConfig) =
+  ## Layer the chosen expression onto a D-ID `script` JSON object so
+  ## the live `POST /talks` body carries
+  ## `script.expressions: [{type, intensity}]`.  Existing entries are
+  ## preserved; the projected one is appended.
+  if scriptObj.isNil or scriptObj.kind != JObject: return
+  if c.emotion.isNone: return
+  let mapped = emotionToExpression(c.emotion.get)
+  var intensity = mapped.intensity
+  if c.intensity.isSome:
+    intensity = c.intensity.get
+  let entry = %*{
+    "type": mapped.expr,
+    "intensity": intensity,
+  }
+  if scriptObj.hasKey("expressions") and
+     scriptObj["expressions"].kind == JArray:
+    scriptObj["expressions"].add entry
+  else:
+    scriptObj["expressions"] = %*[entry]
+
+proc parseGenderField(node: JsonNode): Gender =
+  if node.isNil or node.kind != JString: return gUnspecified
+  parseGender(node.getStr)
+
+proc listAvatars*(apiKey: string;
+                  apiBase: string = DefaultDidApiBase):
+    seq[AvatarInfo] =
+  ## `GET /clips/presenters` — the catalogue of stock presenters
+  ## available on the supplied account.  Normalised onto
+  ## `AvatarInfo`.
+  result = @[]
+  if apiKey.len == 0:
+    raise newException(DidError,
+      "listAvatars: DID_API_KEY is required")
+  let client = newDidHttpClient(apiKey)
+  try:
+    let resp = client.request(apiBase & "/clips/presenters?limit=100",
+                              httpMethod = HttpGet)
+    if not resp.code.is2xx:
+      raiseHttp("GET /clips/presenters", resp)
+    let parsed = parseJson(resp.body)
+    var list: JsonNode = nil
+    if parsed.kind == JObject:
+      if parsed.hasKey("presenters"): list = parsed["presenters"]
+      elif parsed.hasKey("data"): list = parsed["data"]
+    elif parsed.kind == JArray:
+      list = parsed
+    if list.isNil or list.kind != JArray: return
+    for it in list.items:
+      if it.kind != JObject: continue
+      var a = AvatarInfo()
+      a.id = it{"presenter_id"}.getStr("")
+      if a.id.len == 0: a.id = it{"id"}.getStr("")
+      a.name = it{"name"}.getStr("")
+      a.gender = parseGenderField(it{"gender"})
+      a.description = it{"description"}.getStr("")
+      a.previewUrl = it{"thumbnail_url"}.getStr("")
+      if a.previewUrl.len == 0:
+        a.previewUrl = it{"preview_url"}.getStr("")
+      result.add a
+  finally:
+    closeQuietly(client)
+
+proc fetchCredits*(apiKey: string;
+                   apiBase: string = DefaultDidApiBase): int =
+  ## `GET /credits` returns the account-wide credit balance D-ID
+  ## charges per render.  Returns `-1` when the endpoint is
+  ## unreachable so the dry-run can degrade gracefully.
+  result = -1
+  if apiKey.len == 0: return
+  let client = newDidHttpClient(apiKey)
+  try:
+    let resp = client.request(apiBase & "/credits",
+                              httpMethod = HttpGet)
+    if not resp.code.is2xx: return
+    let parsed = parseJson(resp.body)
+    if parsed.kind == JObject:
+      if parsed.hasKey("remaining") and parsed["remaining"].kind == JInt:
+        return int(parsed["remaining"].getInt)
+      if parsed.hasKey("total") and parsed["total"].kind == JInt:
+        return int(parsed["total"].getInt)
+  finally:
+    closeQuietly(client)
+
+proc dryRunValidate*(opts: TalkingHeadOpts;
+                     prefs: AvatarPreferences = AvatarPreferences()):
+    DryRunReport =
+  ## Validate the request locally + against the live D-ID catalogue:
+  ## API key, narration WAV path, credit balance (via `GET /credits`),
+  ## and — if the request references a stock presenter — its
+  ## existence in the live list.
+  result = newDryRunReport("did")
+  let apiKey = resolveApiKey(opts)
+  if apiKey.len == 0:
+    result.addIssue(drError, "api_key",
+      "DID_API_KEY is not set (or providerSettings.api_key is empty)")
+    return
+  let apiBase = resolveApiBase(opts)
+  if opts.avatarImagePath.isNone:
+    result.addIssue(drError, "avatar_image",
+      "opts.avatarImagePath is required by D-ID; either upload a portrait " &
+      "or reference a presenter_id via providerSettings.presenter_id")
+  else:
+    let p = opts.avatarImagePath.get
+    if p.len == 0 or not fileExists(p):
+      result.addIssue(drError, "avatar_image",
+        "portrait not found on disk: '" & p & "'")
+  let credits = fetchCredits(apiKey, apiBase)
+  if credits >= 0:
+    result.quotaRemaining = $credits & " credits"
+    if credits <= 0:
+      result.addIssue(drError, "credits",
+        "D-ID credit balance is zero; renders will return HTTP 402")
+    elif credits < 5:
+      result.addIssue(drWarning, "credits",
+        "D-ID credit balance is low (" & $credits & ")")
+  if prefs.preferred.len > 0:
+    var available: seq[AvatarInfo] = @[]
+    try:
+      available = listAvatars(apiKey, apiBase)
+    except CatchableError as e:
+      result.addIssue(drWarning, "presenters",
+        "could not list presenters: " & e.msg)
+    if available.len > 0:
+      let m = matchPreferredAvatar(prefs, "did", available)
+      if m.isNone:
+        result.addIssue(drWarning, "avatar_preferences",
+          "no preferred presenter matched the D-ID catalogue; the " &
+          "uploaded portrait will be used instead")
 
 proc generateDid*(narrationWav, outputMp4: string,
                   opts: TalkingHeadOpts) {.gcsafe.} =
