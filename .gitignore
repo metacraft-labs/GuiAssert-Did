@@ -26,3 +26,6 @@ tests/tdid
 /user.envrc
 /.direnv/
 tests/temotive_translation
+
+# Repro development environment artifacts
+.repro/
