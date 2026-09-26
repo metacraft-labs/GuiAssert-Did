@@ -12,6 +12,7 @@ default: test
 # that drives the asyncdispatch loop so the main thread can block in
 # httpclient calls.
 test:
+    nim c -r --hints:off --path:src tests/tnimcache_is_worktree_local.nim
     nim c -r --threads:on --hints:off --path:src --path:../GuiAssert/src tests/tdid.nim
 
 # End-to-end live test against the real D-ID API. Requires DID_API_KEY
