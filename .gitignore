@@ -29,6 +29,7 @@ tests/tdid
 /user.envrc
 /.direnv/
 tests/temotive_translation
+tests/tnimcache_is_worktree_local
 
 # Repro development environment artifacts
 .repro/
