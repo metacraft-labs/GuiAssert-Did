@@ -31,13 +31,13 @@ GuiAssert-Did/
 
 ## Cost of setup
 
-| Resource     | Approx.                                                |
-| ------------ | ------------------------------------------------------ |
-| Disk         | None beyond Nim build artefacts                        |
-| Network      | Per-render uploads / download, modest                  |
-| Time         | First call ~10–30 s end-to-end                         |
-| Dollars      | **$5.90/mo** entry tier (10 min/mo)<br/>**$0.10–0.40 per second** of generated video on higher tiers<br/>Free trial: ~5 min on signup |
-| API key      | Yes — `DID_API_KEY` env var                            |
+| Resource | Approx.                                                                                                                               |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Disk     | None beyond Nim build artefacts                                                                                                       |
+| Network  | Per-render uploads / download, modest                                                                                                 |
+| Time     | First call ~10–30 s end-to-end                                                                                                        |
+| Dollars  | **$5.90/mo** entry tier (10 min/mo)<br/>**$0.10–0.40 per second** of generated video on higher tiers<br/>Free trial: ~5 min on signup |
+| API key  | Yes — `DID_API_KEY` env var                                                                                                           |
 
 Pricing is set by D-ID; see [their pricing page](https://www.d-id.com/pricing/)
 for current numbers. The free trial is generally enough to validate
@@ -78,10 +78,10 @@ generateTalkingHead(reg, "did", narrationWav, outputMp4, opts)
 All knobs live under `TalkingHeadOpts.providerSettings` (a `JsonNode`),
 with environment-variable fallbacks:
 
-| Setting | YAML key | Env fallback | Default | Purpose |
-| --- | --- | --- | --- | --- |
-| `api_key` | `api_key` | `DID_API_KEY` | _(none)_ | D-ID API key. |
-| `api_base` | `api_base` | _(none)_ | `https://api.d-id.com` | API endpoint. Override to point at a mock or staging server. |
+| Setting    | YAML key   | Env fallback  | Default                | Purpose                                                      |
+| ---------- | ---------- | ------------- | ---------------------- | ------------------------------------------------------------ |
+| `api_key`  | `api_key`  | `DID_API_KEY` | _(none)_               | D-ID API key.                                                |
+| `api_base` | `api_base` | _(none)_      | `https://api.d-id.com` | API endpoint. Override to point at a mock or staging server. |
 
 The provider name is `"did"`. The `"d-id"` alias also resolves
 correctly via `normalizeProviderName`.
@@ -143,7 +143,7 @@ localhost port, records every request the provider issues (method,
 path, headers, body), and asserts:
 
 - Every request carries `Authorization: Basic
-  RFVNTVlfS0VZOg==` (the base64 of `DUMMY_KEY:`).
+RFVNTVlfS0VZOg==` (the base64 of `DUMMY_KEY:`).
 - `POST /images` and `POST /audios` use `multipart/form-data` and
   embed the fixture bytes verbatim.
 - `POST /talks` carries exactly the JSON shape D-ID documents.
@@ -159,3 +159,26 @@ to spend real D-ID credit simply compiles without `-d:didLive`.
 MIT — see `LICENSE`. D-ID itself is a commercial service governed by
 its own [terms of service](https://www.d-id.com/terms-of-use/); the
 plugin only speaks the public REST API.
+
+## Native contributor hooks
+
+The plugin remains a pure Nim HTTP client. Its developer shell also supplies
+native Python, UV, Prek and the portable formatters from its existing pin.
+The committed hook config runs the seven standard checks and actual public lint.
+
+Select the verified matching managed-hook engine as `REPROBUILD_REPRO`.
+From this repository root, bootstrap its genuine managed layout first:
+
+```sh
+direnv exec . nix develop --no-update-lock-file --no-write-lock-file --command "$REPROBUILD_REPRO" hooks ensure --vcs .
+direnv exec . nix develop --no-update-lock-file --no-write-lock-file --command python3 tools/install-canonical-hooks.py --repro "$REPROBUILD_REPRO"
+direnv exec . nix develop --no-update-lock-file --no-write-lock-file --command prek run --all-files
+```
+
+The installer verifies the complete matching engine and dispatcher bytes,
+preserves known local hooks and pre-push bodies/modes, and refuses unknown or
+external hook ownership. Its installed native Prek body persistently selects
+canonical upstream hook implementations even when the caller selector is absent.
+System Python selection uses the owning native interpreter without managed
+Python downloads. Linux qualification does not establish native Windows tools.
+Original test and required live API prerequisites remain unchanged.
