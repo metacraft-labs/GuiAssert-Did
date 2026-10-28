@@ -1,5 +1,7 @@
 # GuiAssert-Did
 
+Implements the talking-head provider contract of [DemoVideoStudio](https://github.com/metacraft-labs/DemoVideoStudio), version 1 (`demo_video_studio/plugins/talking_head`), and runs its conformance kit in `just test` (`tests/tcontract.nim`). Build it next to DemoVideoStudio and GuiAssert checkouts (or set `DEMO_VIDEO_STUDIO_SRC` and `GUI_ASSERT_SRC`).
+
 D-ID talking-head plugin for [GuiAssert]. Implements GuiAssert's
 `TalkingHeadProvider` contract by speaking the commercial
 [D-ID REST API](https://docs.d-id.com) — no Python, no model weights,
@@ -31,13 +33,13 @@ GuiAssert-Did/
 
 ## Cost of setup
 
-| Resource     | Approx.                                                |
-| ------------ | ------------------------------------------------------ |
-| Disk         | None beyond Nim build artefacts                        |
-| Network      | Per-render uploads / download, modest                  |
-| Time         | First call ~10–30 s end-to-end                         |
-| Dollars      | **$5.90/mo** entry tier (10 min/mo)<br/>**$0.10–0.40 per second** of generated video on higher tiers<br/>Free trial: ~5 min on signup |
-| API key      | Yes — `DID_API_KEY` env var                            |
+| Resource | Approx.                                                                                                                               |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Disk     | None beyond Nim build artefacts                                                                                                       |
+| Network  | Per-render uploads / download, modest                                                                                                 |
+| Time     | First call ~10–30 s end-to-end                                                                                                        |
+| Dollars  | **$5.90/mo** entry tier (10 min/mo)<br/>**$0.10–0.40 per second** of generated video on higher tiers<br/>Free trial: ~5 min on signup |
+| API key  | Yes — `DID_API_KEY` env var                                                                                                           |
 
 Pricing is set by D-ID; see [their pricing page](https://www.d-id.com/pricing/)
 for current numbers. The free trial is generally enough to validate
@@ -58,7 +60,7 @@ setup.
 ## Wiring into a runner
 
 ```nim
-import gui_assert/talking_head
+import demo_video_studio/plugins/talking_head
 import gui_assert_did
 
 let reg = newRegistry()         # registry pre-populated with `stock_avatar`
@@ -78,10 +80,10 @@ generateTalkingHead(reg, "did", narrationWav, outputMp4, opts)
 All knobs live under `TalkingHeadOpts.providerSettings` (a `JsonNode`),
 with environment-variable fallbacks:
 
-| Setting | YAML key | Env fallback | Default | Purpose |
-| --- | --- | --- | --- | --- |
-| `api_key` | `api_key` | `DID_API_KEY` | _(none)_ | D-ID API key. |
-| `api_base` | `api_base` | _(none)_ | `https://api.d-id.com` | API endpoint. Override to point at a mock or staging server. |
+| Setting    | YAML key   | Env fallback  | Default                | Purpose                                                      |
+| ---------- | ---------- | ------------- | ---------------------- | ------------------------------------------------------------ |
+| `api_key`  | `api_key`  | `DID_API_KEY` | _(none)_               | D-ID API key.                                                |
+| `api_base` | `api_base` | _(none)_      | `https://api.d-id.com` | API endpoint. Override to point at a mock or staging server. |
 
 The provider name is `"did"`. The `"d-id"` alias also resolves
 correctly via `normalizeProviderName`.
@@ -128,10 +130,10 @@ The mock-server test validates the cache-hit path: a second
 
 ```sh
 # Pure unit tests + mock-server integration test — no network.
-nim c -r --threads:on --hints:off --path:src --path:../GuiAssert/src tests/tdid.nim
+nim c -r --threads:on --hints:off --path:src --path:../DemoVideoStudio/src --path:../GuiAssert/src tests/tdid.nim
 
 # Live end-to-end against api.d-id.com — requires DID_API_KEY.
-nim c -d:didLive -r --threads:on --hints:off --path:src --path:../GuiAssert/src tests/tdid.nim
+nim c -d:didLive -r --threads:on --hints:off --path:src --path:../DemoVideoStudio/src --path:../GuiAssert/src tests/tdid.nim
 ```
 
 The `--threads:on` flag is required because the mock-server test
@@ -143,7 +145,7 @@ localhost port, records every request the provider issues (method,
 path, headers, body), and asserts:
 
 - Every request carries `Authorization: Basic
-  RFVNTVlfS0VZOg==` (the base64 of `DUMMY_KEY:`).
+RFVNTVlfS0VZOg==` (the base64 of `DUMMY_KEY:`).
 - `POST /images` and `POST /audios` use `multipart/form-data` and
   embed the fixture bytes verbatim.
 - `POST /talks` carries exactly the JSON shape D-ID documents.

@@ -1,7 +1,7 @@
 ## Pure tests for D-ID emotive translation + capability self-description.
 
 import std/[json, options, unittest]
-import gui_assert/talking_head, gui_assert/emotive
+import demo_video_studio/plugins/talking_head, demo_video_studio/emotive
 import gui_assert_did
 
 suite "D-ID emotionToExpression":

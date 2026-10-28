@@ -27,7 +27,7 @@
 ##
 ## ## Live test (compile-time-gated via `-d:didLive`)
 ##
-##   nim c -d:didLive -r --hints:off --path:src --path:../GuiAssert/src \
+##   nim c -d:didLive -r --hints:off --path:src --path:../DemoVideoStudio/src --path:../GuiAssert/src \
 ##       tests/tdid.nim
 ##
 ## Requires `DID_API_KEY` to be set. Per project policy, the live
@@ -37,7 +37,7 @@ import std/[asynchttpserver, asyncdispatch, httpcore, json,
             net, options, os, osproc, streams, strformat, strutils,
             tables, times, unittest]
 
-import gui_assert/talking_head
+import demo_video_studio/plugins/talking_head
 import gui_assert_did
 
 when defined(didLive):
